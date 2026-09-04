@@ -1,6 +1,6 @@
 {
   "name": "@ultratestbro/wdk-protocol-staking-tonstakers-ton",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A simple package that lets @tetherto/wdk-wallet-ton wallet accounts stake through Tonstakers: stake GRAM → tsTON, unstake instant / standard / best-rate, track payout bills, rates and APY.",
   "keywords": [
     "wdk",

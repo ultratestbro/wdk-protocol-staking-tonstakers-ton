@@ -393,9 +393,9 @@ export default class TonstakersProtocolTon extends StakingProtocol {
 
   /**
    * The account's open payout bills — exits waiting for their round. Bills
-   * are NFTs in the pool's current payout collection(s), read through the
-   * same off-chain indexes the official SDK uses; with `endpoints.tonapi`
-   * disabled this returns an empty view. Nothing here is ever claimable:
+   * are NFTs in the pool's payout collection (on-chain: `withdrawal_payout`)
+   * plus any closing round Tonstakers' API still lists, read through tonapi's
+   * NFT index; with `endpoints.tonapi` disabled this returns an empty view. Nothing here is ever claimable:
    * the pool settles bills by itself after the round, so `claimableIds`
    * stays empty and `timestamp` is the round's start.
    *
@@ -404,21 +404,52 @@ export default class TonstakersProtocolTon extends StakingProtocol {
   async getWithdrawalRequests () {
     const empty = { requests: [], pendingAmount: 0n, claimableAmount: 0n, claimableIds: [] }
     const { tonapi, withdrawalPayouts } = this._endpoints
-    if (!tonapi || !withdrawalPayouts) return empty
+    if (!tonapi) return empty
     const owner = Address.parse(await this._account.getAddress()).toRawString()
-    let collections
+
+    // Which collections hold bills: the pool's current payout collection is
+    // the on-chain truth; Tonstakers' API adds the round timing and any
+    // collection from a round that closed but hasn't settled yet. The API
+    // routinely lists nothing between a round closing and its settlement —
+    // bills still exist then, so the on-chain collection is never optional.
+    const collections = new Map()
     try {
-      const res = await fetch(withdrawalPayouts)
-      if (!res.ok) return empty
-      const body = await res.json()
-      collections = body?.data?.active_collections ?? []
-    } catch {
-      return empty
-    }
-    const requests = []
-    for (const col of collections) {
+      const pool = await this.getPoolData()
+      if (pool.withdrawalPayout) collections.set(pool.withdrawalPayout.toRawString(), { cycleStart: 0, cycleEnd: 0 })
+    } catch {}
+    if (withdrawalPayouts) {
       try {
-        const res = await fetch(`${tonapi}/accounts/${owner}/nfts?collection=${col.withdrawal_payout}&limit=100`)
+        const res = await fetch(withdrawalPayouts)
+        if (res.ok) {
+          const body = await res.json()
+          for (const col of body?.data?.active_collections ?? []) {
+            const key = Address.parse(col.withdrawal_payout).toRawString()
+            collections.set(key, { cycleStart: Number(col.cycle_start ?? 0), cycleEnd: Number(col.cycle_end ?? 0) })
+          }
+        }
+      } catch {}
+    }
+    if (collections.size === 0) return empty
+
+    // Round timing fallback: the validation cycle tonapi reports for the pool.
+    let cycle = null
+    const needsCycle = [...collections.values()].some((c) => !c.cycleEnd)
+    if (needsCycle) {
+      try {
+        const res = await fetch(`${tonapi}/staking/pool/${this._pool.toString()}`)
+        if (res.ok) {
+          const body = await res.json()
+          cycle = { start: Number(body?.pool?.cycle_start ?? 0), end: Number(body?.pool?.cycle_end ?? 0) }
+        }
+      } catch {}
+    }
+
+    const requests = []
+    for (const [collection, timing] of collections) {
+      const roundStart = timing.cycleStart || cycle?.start || 0
+      const roundEnd = timing.cycleEnd || cycle?.end || 0
+      try {
+        const res = await fetch(`${tonapi}/accounts/${owner}/nfts?collection=${collection}&limit=100`)
         if (!res.ok) continue
         const body = await res.json()
         for (const item of body?.nft_items ?? []) {
@@ -427,12 +458,12 @@ export default class TonstakersProtocolTon extends StakingProtocol {
           requests.push({
             id: BigInt(item.index ?? requests.length),
             amount,
-            timestamp: Number(col.cycle_start ?? 0),
+            timestamp: roundStart,
             claimable: false,
             nft: item.address,
-            roundEnd: Number(col.cycle_end),
+            roundEnd,
             // The SDK's estimate: round end plus ~10 minutes of settlement.
-            estimatedPayout: Number(col.cycle_end) + 10 * 60
+            estimatedPayout: roundEnd ? roundEnd + 10 * 60 : 0
           })
         }
       } catch {}
