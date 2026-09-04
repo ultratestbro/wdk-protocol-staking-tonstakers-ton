@@ -104,6 +104,24 @@ function toAmount (amount) {
   return value
 }
 
+/**
+ * REST reads with a courtesy retry: keyless tonapi rate-limits bursts (a
+ * screen opening fires several reads at once) and answers 429 — a silent
+ * skip there hides real bills. Two short waits before giving up.
+ *
+ * @param {string} url - The URL.
+ * @returns {Promise<Response>} The response (possibly still not ok).
+ */
+async function fetchWithRetry (url) {
+  let res
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = await fetchWithRetry(url)
+    if (res.status !== 429) return res
+    await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)))
+  }
+  return res
+}
+
 /** Reads the address a `cell`/`slice` stack item wraps, or null. */
 function readAddressItem (reader) {
   const item = reader.peek()
@@ -397,7 +415,9 @@ export default class TonstakersProtocolTon extends StakingProtocol {
    * plus any closing round Tonstakers' API still lists, read through tonapi's
    * NFT index; with `endpoints.tonapi` disabled this returns an empty view. Nothing here is ever claimable:
    * the pool settles bills by itself after the round, so `claimableIds`
-   * stays empty and `timestamp` is the round's start.
+   * stays empty and `timestamp` is the round's start. `roundEnd` /
+   * `estimatedPayout` are 0 while the round is closing (settlement is
+   * minutes away then).
    *
    * @returns {Promise<WithdrawalRequestsView & { requests: (import('./staking-protocol.js').WithdrawalRequest & { nft: string, roundEnd: number, estimatedPayout: number })[] }>} The queue view.
    */
@@ -419,7 +439,7 @@ export default class TonstakersProtocolTon extends StakingProtocol {
     } catch {}
     if (withdrawalPayouts) {
       try {
-        const res = await fetch(withdrawalPayouts)
+        const res = await fetchWithRetry(withdrawalPayouts)
         if (res.ok) {
           const body = await res.json()
           for (const col of body?.data?.active_collections ?? []) {
@@ -431,25 +451,18 @@ export default class TonstakersProtocolTon extends StakingProtocol {
     }
     if (collections.size === 0) return empty
 
-    // Round timing fallback: the validation cycle tonapi reports for the pool.
-    let cycle = null
-    const needsCycle = [...collections.values()].some((c) => !c.cycleEnd)
-    if (needsCycle) {
-      try {
-        const res = await fetch(`${tonapi}/staking/pool/${this._pool.toString()}`)
-        if (res.ok) {
-          const body = await res.json()
-          cycle = { start: Number(body?.pool?.cycle_start ?? 0), end: Number(body?.pool?.cycle_end ?? 0) }
-        }
-      } catch {}
-    }
+    // No timing fallback on purpose: tonapi's pool "cycle" is the validator
+    // election cycle, not the payout round — seen live, it pointed a day out
+    // while the bills settled 14 minutes after the API's cycle_end. When the
+    // API lists nothing for a collection the round is closing and bills
+    // settle within minutes; `roundEnd` 0 says exactly that.
 
     const requests = []
     for (const [collection, timing] of collections) {
-      const roundStart = timing.cycleStart || cycle?.start || 0
-      const roundEnd = timing.cycleEnd || cycle?.end || 0
+      const roundStart = timing.cycleStart || 0
+      const roundEnd = timing.cycleEnd || 0
       try {
-        const res = await fetch(`${tonapi}/accounts/${owner}/nfts?collection=${collection}&limit=100`)
+        const res = await fetchWithRetry(`${tonapi}/accounts/${owner}/nfts?collection=${collection}&limit=100`)
         if (!res.ok) continue
         const body = await res.json()
         for (const item of body?.nft_items ?? []) {
@@ -537,7 +550,7 @@ export default class TonstakersProtocolTon extends StakingProtocol {
     if (!this._endpoints.tonapi) {
       throw new Error('APY needs endpoints.tonapi.')
     }
-    const res = await fetch(`${this._endpoints.tonapi}/staking/pool/${this._pool.toString()}`)
+    const res = await fetchWithRetry(`${this._endpoints.tonapi}/staking/pool/${this._pool.toString()}`)
     if (!res.ok) {
       throw new Error(`tonapi staking pool: HTTP ${res.status}`)
     }
