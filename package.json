@@ -1,0 +1,61 @@
+{
+  "name": "@ultratestbro/wdk-protocol-staking-tonstakers-ton",
+  "version": "0.1.0",
+  "description": "A simple package that lets @tetherto/wdk-wallet-ton wallet accounts stake through Tonstakers: stake GRAM → tsTON, unstake instant / standard / best-rate, track payout bills, rates and APY.",
+  "keywords": [
+    "wdk",
+    "protocol",
+    "staking",
+    "tonstakers",
+    "tston",
+    "ton",
+    "gram",
+    "liquid-staking",
+    "staking-protocol"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ultratestbro/wdk-protocol-staking-tonstakers-ton.git"
+  },
+  "main": "index.js",
+  "type": "module",
+  "types": "./types/index.d.ts",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "verify:live": "node scripts/verify-live.mjs"
+  },
+  "files": [
+    "index.js",
+    "bare.js",
+    "src",
+    "types",
+    "tests",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@ton/core": "^0.63.1",
+    "@ton/ton": "^16.2.4"
+  },
+  "peerDependencies": {
+    "@tetherto/wdk-wallet": ">=1.0.0-beta.13"
+  },
+  "devDependencies": {
+    "@tetherto/wdk-wallet": "1.0.0-beta.17"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "bare": "./bare.js",
+      "default": "./index.js"
+    },
+    "./package": {
+      "default": "./package.json"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
